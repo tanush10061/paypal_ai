@@ -1,0 +1,49 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PayInvoice AI</title>
+<style>
+:root{--bg:#f5f7fa;--ink:#14213d;--mut:#5b6b85;--card:#fff;--line:#d9e0ea;--acc:#003087;--ok:#0a7a4b;--warn:#b45309}
+@media(prefers-color-scheme:dark){:root{--bg:#0e1626;--ink:#e8edf6;--mut:#93a3bd;--card:#16213a;--line:#2a3a5c;--acc:#6aa5ff;--ok:#4ade9a;--warn:#fbbf24}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 Georgia,serif}
+main{max-width:760px;margin:0 auto;padding:32px 20px 64px}
+h1{font-size:2rem;margin:0 0 4px}p.sub{color:var(--mut);margin:0 0 24px}
+textarea{width:100%;min-height:84px;padding:12px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--ink);font:inherit}
+button{font:inherit;padding:9px 16px;border-radius:6px;border:1px solid var(--acc);background:var(--acc);color:#fff;cursor:pointer}
+button.ghost{background:none;color:var(--acc)}button:focus-visible,textarea:focus-visible{outline:3px solid var(--warn);outline-offset:2px}
+@media(prefers-color-scheme:dark){button{color:#0e1626}button.ghost{color:var(--acc)}}
+.box{background:var(--card);border:1px solid var(--line);border-radius:6px;padding:16px;margin:16px 0}
+table{width:100%;border-collapse:collapse}td,th{text-align:left;padding:8px 6px;border-bottom:1px solid var(--line);font-size:.92rem}
+.wrap{overflow-x:auto}.row{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
+.PAID{color:var(--ok)}.SENT,.UNPAID{color:var(--warn)}pre{white-space:pre-wrap;font:inherit}
+h2{font-size:1.2rem;margin:32px 0 8px}.err{color:#c0392b}
+</style></head><body><main>
+<h1>PayInvoice AI</h1>
+<p class="sub">Describe the invoice in plain English. Claude fills it in, you confirm, PayPal sends it.</p>
+<textarea id="t" aria-label="Invoice request">Invoice Acme Corp $1,200 for logo design, due in 14 days, email billing@acme.com</textarea>
+<div class="row"><button id="go">Draft invoice</button></div>
+<div id="msg" class="err" role="alert"></div>
+<div id="draft"></div>
+<h2>Invoices</h2>
+<div class="box wrap"><table><thead><tr><th>No.</th><th>To</th><th>Amount</th><th>Due</th><th>Status</th><th></th></tr></thead><tbody id="rows"></tbody></table></div>
+<div id="rem"></div>
+</main><script>
+const $=id=>document.getElementById(id);let cur=null;
+const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+async function api(u,o){const r=await fetch(u,o);if(!r.ok)throw new Error((await r.text()).slice(0,300));return r.json()}
+const post=(u,b)=>api(u,{method:'POST',headers:{'Content-Type':'application/json'},body:b?JSON.stringify(b):undefined});
+$('go').onclick=async()=>{$('msg').textContent='';$('go').disabled=true;
+ try{cur=await post('/api/parse',{text:$('t').value});cur.currency=cur.currency||'USD';cur.due_in_days=cur.due_in_days||14;
+  const tot=cur.items.reduce((a,i)=>a+i.quantity*i.unit_price,0);
+  $('draft').innerHTML=`<div class="box"><b>Confirm invoice</b><p>To: ${esc(cur.client_name)} (${esc(cur.client_email)})<br>Due in ${cur.due_in_days} days</p><ul>${cur.items.map(i=>`<li>${esc(i.description)}: ${i.quantity} × ${i.unit_price}</li>`).join('')}</ul><p><b>Total ${tot.toFixed(2)} ${esc(cur.currency)}</b></p><p>${esc(cur.note)}</p><div class="row"><button id="ok">Send invoice</button><button class="ghost" id="no">Cancel</button></div></div>`;
+  $('no').onclick=()=>$('draft').innerHTML='';
+  $('ok').onclick=async()=>{$('ok').disabled=true;try{await post('/api/invoices',cur);$('draft').innerHTML='<div class="box">Invoice sent.</div>';load()}catch(e){$('msg').textContent=e.message;$('ok').disabled=false}};
+ }catch(e){$('msg').textContent=e.message}$('go').disabled=false};
+async function load(){try{const d=await api('/api/invoices');
+ $('rows').innerHTML=d.length?d.map(i=>`<tr><td>${esc(i.number)}</td><td>${esc(i.recipient)}</td><td>${esc(i.amount)}</td><td>${esc(i.due)}</td><td class="${esc(i.status)}">${esc(i.status)}</td><td>${i.status==='PAID'?'':`<button class="ghost" data-id="${esc(i.id)}">Draft reminder</button>`}</td></tr>`).join(''):'<tr><td colspan="6">No invoices yet. Draft one above.</td></tr>'}catch(e){$('msg').textContent=e.message}}
+$('rows').onclick=async e=>{const id=e.target.dataset.id;if(!id)return;e.target.disabled=true;
+ try{const r=await post(`/api/invoices/${id}/reminder`);
+  $('rem').innerHTML=`<div class="box"><b>Reminder draft</b><pre>${esc(r.draft)}</pre><div class="row"><button id="sr">Send reminder via PayPal</button></div></div>`;
+  $('sr').onclick=async()=>{try{await post(`/api/invoices/${id}/send-reminder`);$('rem').innerHTML='<div class="box">Reminder sent.</div>'}catch(x){$('msg').textContent=x.message}}
+ }catch(x){$('msg').textContent=x.message}e.target.disabled=false};
+load();
+</script></body></html>
