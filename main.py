@@ -1,6 +1,6 @@
 import os, json, time, base64
 import httpx
-from anthropic import Anthropic
+from openai import OpenAI
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
@@ -10,8 +10,8 @@ from pydantic import BaseModel
 load_dotenv()
 PP = "https://api-m.sandbox.paypal.com"
 CID, SECRET = os.environ["PAYPAL_CLIENT_ID"], os.environ["PAYPAL_CLIENT_SECRET"]
-MODEL = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-6")
-claude = Anthropic()
+MODEL = os.getenv("LLM_MODEL", "llama-3.3-70b-versatile")
+llm = OpenAI(base_url=os.getenv("LLM_BASE_URL", "https://api.groq.com/openai/v1"), api_key=os.environ["LLM_API_KEY"])
 app = FastAPI(title="PayInvoice AI")
 _tok = {"v": None, "exp": 0}
 
@@ -33,10 +33,10 @@ def pp(method, path, **kw):
     return r.json() if r.content else {}
 
 
-INVOICE_TOOL = {
+INVOICE_TOOL = {"type": "function", "function": {
     "name": "create_invoice_draft",
     "description": "Extract invoice details from the user's request.",
-    "input_schema": {
+    "parameters": {
         "type": "object",
         "properties": {
             "client_name": {"type": "string"},
@@ -50,7 +50,7 @@ INVOICE_TOOL = {
         },
         "required": ["client_name", "client_email", "items"],
     },
-}
+}}
 
 
 class Parse(BaseModel):
@@ -59,15 +59,15 @@ class Parse(BaseModel):
 
 @app.post("/api/parse")
 def parse(p: Parse):
-    msg = claude.messages.create(
+    r = llm.chat.completions.create(
         model=MODEL, max_tokens=1000, tools=[INVOICE_TOOL],
-        tool_choice={"type": "tool", "name": "create_invoice_draft"},
+        tool_choice={"type": "function", "function": {"name": "create_invoice_draft"}},
         messages=[{"role": "user", "content": p.text}],
     )
-    for b in msg.content:
-        if b.type == "tool_use":
-            return b.input
-    raise HTTPException(422, "Could not parse an invoice from that text")
+    calls = r.choices[0].message.tool_calls
+    if not calls:
+        raise HTTPException(422, "Could not parse an invoice from that text")
+    return json.loads(calls[0].function.arguments)
 
 
 class Draft(BaseModel):
@@ -114,13 +114,13 @@ def list_invoices():
 @app.post("/api/invoices/{inv_id}/reminder")
 def reminder(inv_id: str):
     i = pp("GET", f"/v2/invoicing/invoices/{inv_id}")
-    msg = claude.messages.create(
+    r = llm.chat.completions.create(
         model=MODEL, max_tokens=400,
         messages=[{"role": "user", "content":
                    "Write a short, polite, friendly payment reminder email (subject + body) for this unpaid invoice. "
                    f"Do not invent facts.\n{json.dumps({'number': i['detail'].get('invoice_number'), 'status': i.get('status'), 'due': i['detail'].get('payment_term', {}).get('due_date'), 'amount': i.get('amount')})}"}],
     )
-    return {"draft": msg.content[0].text}
+    return {"draft": r.choices[0].message.content}
 
 
 @app.post("/api/invoices/{inv_id}/send-reminder")

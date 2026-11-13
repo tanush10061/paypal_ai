@@ -11,5 +11,5 @@ services:
         sync: false
       - key: PAYPAL_MERCHANT_EMAIL
         sync: false
-      - key: ANTHROPIC_API_KEY
+      - key: LLM_API_KEY
         sync: false
